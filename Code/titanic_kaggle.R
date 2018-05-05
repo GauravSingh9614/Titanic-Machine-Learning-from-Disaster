@@ -1,0 +1,254 @@
+#' ---	
+#' title: "Titanic_kaggle"	
+#' author: "Gaurav Singh"	
+#' date: "4 May 2018"	
+#' output: github_document	
+#' ---	
+#' 	
+#' The following document is a step by step process for solving the Titanic: Machine Learning from Disaster competition in kaggle. The problem at hand was to predict which passengers survived the tragedy. My main focus in this project was on feature engineering and modelling.	
+#' 	
+#' The competition details can be found on https://www.kaggle.com/c/titanic	
+#' 	
+#' I have used the random forest classification model and have achieved 80.4% accuracy which is in the top 9% rank.	
+#' 	
+#' # Loading the required packages	
+#' 	
+library(dplyr)	
+library(ggplot2)	
+library(tidyr)	
+library(parallel)	
+library(randomForest)	
+library(caret)	
+library(car)	
+#' 	
+#' 	
+#' # Reading in the datasets	
+#' 	
+train <- read.csv('Datasets/train.csv')	
+test <- read.csv('Datasets/test.csv')	
+#' 	
+#' 	
+#' # Looking at the structure of the train dataset	
+#' 	
+glimpse(train)	
+#' 	
+#' We can see that there are 891 observations and 12 variables.	
+#' 	
+#' # Looking at the structure of the test dataset	
+#' 	
+glimpse(test)	
+#' 	
+#' 	
+#' We can see that there are 418 observations and only 11 variables. 	
+#' 	
+#' # Combine train and test set	
+#' 	
+test$Survived <- 0	
+titanic.full <- rbind(train, test)	
+glimpse(titanic.full)	
+#' 	
+#' I combined both the train set and test set so that I could preprocess the entire dataset simultaneously. 	
+#' 	
+#' # Feature Engineering	
+#' ## Dealing with titles	
+#' 	
+regex <- gregexpr(', [^\\..]+.', titanic.full$Name)	
+titles <- regmatches(titanic.full$Name, regex)	
+titles <- gsub(', ', "", titles)	
+titles <- gsub('.', "", titles, fixed = TRUE)	
+titanic.full$Title <- titles	
+#' 	
+#' I extracted the titles from the Name column and placed it in a new column named Title. This was done as I felt that it could be a good variable to predict whether an individual would survive or not as individuals with a more prestigious title would have first priority on getting a safety boat and hence more likely to survive.	
+#' 	
+#' 	
+table(titanic.full$Title)	
+#' 	
+#' Since many titles occur rarely i.e. have very low frequency, I decided to combine them into a new level named rare.title if they occured less than 10 times.	
+#' 	
+#' 	
+rare.title <- names(table(titanic.full$Title))[table(titanic.full$Title) < 10][-9:-11]	
+titanic.full$Title[titanic.full$Title %in% rare.title]  <- 'Rare_Title'	
+#' 	
+#' 	
+#' Next, I also wanted to fix some obvious typos in the Title column.	
+#' 	
+titanic.full$Title[titanic.full$Title == 'Mlle']        <- 'Miss' 	
+titanic.full$Title[titanic.full$Title == 'Ms']          <- 'Miss'	
+titanic.full$Title[titanic.full$Title == 'Mme']         <- 'Mrs' 	
+table(titanic.full$Title)	
+#' 	
+#' The Title column looks much more organised now.	
+#' 	
+#' # Family Size	
+#' 	
+#' I figured out a way to determine the family size of an individual using the SibSp and Parch columns.	
+#' 	
+titanic.full$FamilySize <- 1 + titanic.full$SibSp + titanic.full$Parch	
+#' 	
+#' 	
+#' 	
+ggplot(data = titanic.full, aes(x = factor(FamilySize))) + geom_bar(fill = "blue") + ggtitle("Distribution of Family Size") + theme_bw()	
+#' 	
+#' 	
+#' We can see that very few individuals have a family size greater than 4.	
+#' 	
+#' 	
+#' # Family Size Discretized	
+#' Based on the above distribution, I decided to group the FamilySize variable.	
+#' 	
+#' 	
+titanic.full$FamilySizeDis[titanic.full$FamilySize == 1] <- 'singleton'	
+titanic.full$FamilySizeDis[titanic.full$FamilySize < 5 & titanic.full$FamilySize > 1] <- 'small'	
+titanic.full$FamilySizeDis[titanic.full$FamilySize > 4] <- 'large'	
+ggplot(titanic.full, aes(x = FamilySizeDis)) + geom_bar(fill = "blue") + ggtitle("Distribution of Family Size (Grouped)") + theme_bw() + xlab("Type")	
+#' 	
+#' 	
+#' # Cabin Level	
+#' I extracted the first letters of the Cabin column as it might represent the level it is situated in the ship and hence might have some relation with Survived.	
+#' 	
+#' 	
+cabin.level <- substr(titanic.full$Cabin, 1, 1)	
+table(cabin.level)	
+titanic.full$Cabin.Level <- cabin.level	
+#' 	
+#' We see that majority of the Cabins do not have any levels associated with it.	
+#' 	
+#' # Dealing with Missing Values	
+#' 	
+#' 	
+str(titanic.full)	
+#' 	
+#' 	
+#' I first wanted to get rid of "" factor level in the Embarked column.	
+#' 	
+#' ## Embarked	
+#' 	
+titanic.full %>% filter(Embarked == "")	
+#' 	
+#' We see that both these embarkments have a fare of 80. I decided to use this for imputing these values logically.	
+#' 	
+#' 	
+ggplot(titanic.full, aes(x = Embarked, y = Fare)) + geom_boxplot() + ggtitle("Fare by Embarkment Port") + theme_bw()	
+#' 	
+#' 	
+#' We see that Embarkment port C coincides nicely with the Fare of 80. Hence, I decided to replace these values with 'C'.	
+#' 	
+#' 	
+titanic.full[c(62,830), 'Embarked'] <- 'C'	
+#' 	
+#' 	
+#' 	
+colSums(is.na(titanic.full))	
+#' 	
+#' We see that Fare has 1 missing value and Age has 263. The remaining columns do not have any missing values.	
+#' 	
+#' ## Fare	
+#' 	
+#' 	
+titanic.full %>% filter(is.na(Fare))	
+#' 	
+#' 	
+#' I visualised the distribution of fare using the Pclass and Embarked of the missing column which is 3 and 'S' respectively.	
+#' 	
+ggplot(titanic.full[titanic.full$Pclass == 3 & titanic.full$Embarked == 'S', ], aes(x = Fare)) + geom_density() + scale_x_continuous() + ggtitle("Distribution of Fare") + theme_bw()	
+#' 	
+#' 	
+#' Looking at this distribution, since it is fairly right skewed, I decided go replace the missing value with the median.	
+#' 	
+#' 	
+titanic.full$Fare[1044] <- median(titanic.full[titanic.full$Pclass == 3 & titanic.full$Embarked == 'S', 'Fare'], na.rm = TRUE)	
+#' 	
+#' 	
+#' ## Data Type Conversion	
+#' 	
+#' Before proceeding on to deal with missing age values, I converted the relevant columns to their appropriate data types.	
+#' 	
+factor.vars <- c('PassengerId', 'Pclass', 'Title', 'FamilySize', 'FamilySizeDis', 'Cabin.Level')	
+titanic.full[factor.vars] <- lapply(titanic.full[factor.vars], function(x){as.factor(x)})	
+#' 	
+#' 	
+#' ## Age	
+#' 	
+#' 	
+titanic.full.dummy.model <- dummyVars(~. -PassengerId -Name -Ticket -Cabin -Survived -Cabin.Level, data = titanic.full)	
+titanic.full.dummy <- predict(titanic.full.dummy.model, newdata = titanic.full)	
+	
+impute <- preProcess(titanic.full.dummy, method = "bagImpute")	
+titanic.preprocessed <- predict(impute, newdata = titanic.full.dummy)	
+	
+titanic.full$Age <- titanic.preprocessed[,'Age']	
+#' 	
+#' I used the bagImpute method from the carat package to predict the values for the missing age since the number of missing values for age was of high proportion that it could not be deleted completely. In addition to that, taking the mean or median would not be very accurate for the majority of these missing observations.	
+#' 	
+#' ## Child	
+#' 	
+#' I decided to create a new variable named Child, as I felt that children might have a higher priority for Survival.	
+#' 	
+titanic.full$Child[titanic.full$Age < 18] <- 'Child'	
+titanic.full$Child[titanic.full$Age >= 18] <- 'Adult'	
+ggplot((titanic.full %>% select(Child, Survived)), aes(x = Child)) + geom_bar(aes(fill = factor(Survived)), position = "dodge") + ggtitle("Survived by Adults/Children") + theme_bw()	
+#' 	
+#' 	
+#' We can see that the Adults were much less likely to survive as compared to children.	
+#' 	
+#' ## Mother	
+#' I created a new variable named Mother which indicates whether a person is a mother or not. I wanted to see whether mothers had a higher survival rate and given higher priority with the safety boats. The conditions I took into account to mark an indivial as a mother or not are -> Sex = Female, Parch > 0, Age > 18 and Title not equal to Miss. 	
+#' 	
+titanic.full$Mother <- 'Not Mother'	
+titanic.full$Mother[titanic.full$Sex == 'female' & titanic.full$Parch > 0 & titanic.full$Age > 18 & titanic.full$Title != 'Miss'] <- 'Mother'	
+	
+titanic.full$Child <- as.factor(titanic.full$Child)	
+titanic.full$Mother <- as.factor(titanic.full$Mother)	
+	
+ggplot((titanic.full %>% select(Mother, Survived)), aes(x = Mother)) + geom_bar(aes(fill = factor(Survived)), position = "dodge") + ggtitle("Survived by Mother") + theme_bw()	
+#' 	
+#' 	
+#' It is clear from the above plot that non-mothers are much more likely to die than mothers.	
+#' 	
+#' ## HasCabin	
+#' 	
+#' I created this variable to indicate whether an individual is alloted a Cabin and see later if this variable would be of importance while training the random forest model.	
+#' 	
+titanic.full$HasCabin <- ifelse(titanic.full$Cabin == "", 0, 1)	
+titanic.full$HasCabin <- as.factor(titanic.full$HasCabin)	
+#' 	
+#' 	
+#' # Modelling	
+#' 	
+#' ## Splitting the dataset into train and test sets	
+#' 	
+#' 	
+titanic.train <- slice(titanic.full, 1:891)	
+titanic.test <- slice(titanic.full, 892:1309)	
+#' 	
+#' 	
+#' ## Random Forest Model	
+#' 	
+#' 	
+#train.control <- trainControl(method = 'repeatedcv', repeats = 3, number = 10, verboseIter = TRUE)	
+	
+set.seed(754)	
+rf.model.car <- train(factor(Survived) ~ Title + Age + Sex + 	
+                        Fare + Embarked + Pclass +	
+                        FamilySizeDis + Child + Mother, method = 'rf', data = titanic.train)	
+#' 	
+#' I trained the random forest model using various combination of attributes making use of the variable importance function of the carat package. The final attributes that I decided to use were Title, Age, Sex, Fare, Embarked, Pclass, FamilySizeDis, Child and Mother.	
+#' 	
+#' 	
+rf.model.car	
+#' 	
+#' The model was tuned with mtry = 2 and achieved an Accuracy of 0.83 on the out of bag sample that random forest uses by default. Hence, cross validation was not required.	
+#' 	
+#' # Prediction	
+#' 	
+#' 	
+predictions <- predict(rf.model.car, newdata = titanic.test)	
+#' 	
+#' The trained random forest model was then used on the test dataset for prediction of the target column i.e. Survived.	
+#' 	
+#' # Creating final submission csv file	
+#' 	
+submission <- data.frame(PassengerId = titanic.test$PassengerId, Survived = predictions)	
+write.csv(submission, file = "titanic_submission.csv", row.names = FALSE)	
+#' 	
+#' This submission file scored an 80.4% accuracy which is in the top 9%.	
